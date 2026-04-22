@@ -1,28 +1,54 @@
-# Confluence AI Chatbot
+# MyGuru.AI
 
-A beautiful and intelligent chatbot that searches through your Confluence documentation (including all spaces and PDFs) to answer questions. Built with Streamlit, Azure OpenAI GPT-4o, and FAISS vector search.
+A multi-source AI knowledge assistant that searches Confluence documentation, GitHub repositories, and a structured database to answer questions. Built with Streamlit, Azure OpenAI GPT-4o, LangChain agents, and FAISS vector search.
 
 ## Features
 
-✨ **Comprehensive Search**
-- Searches across all Confluence spaces
-- Includes content from PDF attachments
-- Extracts and displays related GitHub repository links
+🧠 **Intent-Routed Multi-Agent System**
+- Supervisor agent uses GPT-4o to classify query intent before routing
+- Routes queries only to the relevant agent (Confluence, GitHub, or Database)
+- Falls back to Confluence when routing returns no usable result
+
+✨ **Multi-Source Search**
+- Confluence: searches all spaces and PDF attachments via semantic vector search
+- GitHub: searches indexed README files from accessible repositories
+- Database: executes natural-language-to-SQL queries against a structured database
+
+🔍 **Semantic Chunking**
+- Uses LangChain `SemanticChunker` with percentile-based breakpoints for Confluence content
+- GitHub READMEs are stored as single chunks (one document, one vector)
+- Falls back to `RecursiveCharacterTextSplitter` (chunk size 1200, overlap 150) if SemanticChunker is unavailable
+
+📦 **FAISS Vector Store**
+- Separate FAISS indexes for Confluence and GitHub content
+- Chunking reports saved as JSON after each indexing run
 
 🤖 **AI-Powered Responses**
-- Uses Azure OpenAI GPT-4o for intelligent answers
-- Provides context-aware responses
-- Shows source references for transparency
+- Azure OpenAI GPT-4o generates answers grounded strictly in retrieved content
+- No hallucination from prior knowledge — agents only use tool-returned data
+- Source links included in every response
 
-🎨 **Beautiful UI**
-- Clean and modern Streamlit interface
-- Real-time chat experience
-- Displays sources and relevance scores
+🎨 **Streamlit UI**
+- Clean dark-themed chat interface
+- Fixed header, full-width messages, and persistent chat history per session
 
-🔍 **Semantic Search**
-- FAISS vector store for fast similarity search
-- Azure text-embedding-3-small for embeddings
-- Retrieves most relevant content chunks
+## Architecture
+
+```
+User Query
+    │
+    ▼
+Supervisor Agent (GPT-4o intent router)
+    │
+    ├── Intent: "confluence"  →  Confluence Agent  →  FAISS (Confluence index)
+    ├── Intent: "github"      →  GitHub Agent      →  FAISS (GitHub index)
+    ├── Intent: "database"    →  Database Agent    →  SQLite / Azure SQL
+    │
+    └── Fallback: Confluence Agent (when routed agents return no useful result)
+         │
+         ▼
+    Merge outputs  →  Return combined answer with source links
+```
 
 ## Prerequisites
 
@@ -31,22 +57,22 @@ A beautiful and intelligent chatbot that searches through your Confluence docume
   - GPT-4o deployment
   - text-embedding-3-small deployment
 - Confluence Cloud instance with API access
+- GitHub personal access token (for GitHub indexing)
 
 ## Installation
 
 1. **Clone the repository or navigate to the project directory**
 
 ```bash
-cd AIGuru
+cd MyGuru.AI-main
 ```
 
 2. **Create a virtual environment**
 
 ```bash
 python -m venv venv
-source venv/bin/activate  # On macOS/Linux
-# or
-venv\Scripts\activate  # On Windows
+source venv/bin/activate  # macOS/Linux
+venv\Scripts\activate     # Windows
 ```
 
 3. **Install dependencies**
@@ -57,144 +83,182 @@ pip install -r requirements.txt
 
 4. **Configure environment variables**
 
-Copy the `.env.example` file to `.env`:
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` and fill in your credentials:
+Create a `.env` file in the project root:
 
 ```env
-# Azure OpenAI Configuration
+# Azure OpenAI
 AZURE_OPENAI_API_KEY=your_azure_openai_api_key
 AZURE_OPENAI_ENDPOINT=https://your-resource-name.openai.azure.com/
 AZURE_OPENAI_API_VERSION=2024-02-15-preview
 AZURE_OPENAI_CHAT_DEPLOYMENT=gpt-4o
 AZURE_OPENAI_EMBEDDING_DEPLOYMENT=text-embedding-3-small
 
-# Confluence Configuration
+# Confluence
 CONFLUENCE_URL=https://your-domain.atlassian.net
 CONFLUENCE_USERNAME=your_email@example.com
 CONFLUENCE_API_TOKEN=your_confluence_api_token
+
+# GitHub (optional)
+GITHUB_TOKEN=your_github_personal_access_token
+GITHUB_ORGANIZATION=your_org_name           # optional
+GITHUB_INDEX_REPOS=org/repo1,org/repo2      # optional, comma-separated
 ```
 
-### Getting Confluence API Token
+### Getting a Confluence API Token
 
 1. Go to https://id.atlassian.com/manage-profile/security/api-tokens
-2. Click "Create API token"
-3. Give it a label and copy the token
-4. Use your email as username and the token as password
+2. Click **Create API token**, give it a label, and copy the token
+3. Use your Atlassian email as `CONFLUENCE_USERNAME` and the token as `CONFLUENCE_API_TOKEN`
 
 ### Setting up Azure OpenAI
 
 1. Create an Azure OpenAI resource in the Azure portal
-2. Deploy GPT-4o model
-3. Deploy text-embedding-3-small model
-4. Copy the endpoint and API key
+2. Deploy `gpt-4o` and `text-embedding-3-small` models
+3. Copy the endpoint URL and API key into `.env`
 
-## Setup
+## Indexing
 
-Before running the chatbot, you need to index your Confluence documentation:
+### Index Confluence content
 
 ```bash
 python setup_index.py
 ```
 
-This script will:
-1. Connect to your Confluence instance
-2. Fetch all pages from all spaces
-3. Download and process PDF attachments
-4. Create embeddings using Azure OpenAI
-5. Build a FAISS vector index
+This will:
+1. Connect to all accessible Confluence spaces
+2. Fetch every page and PDF attachment
+3. Apply semantic chunking to each document
+4. Generate embeddings and build a FAISS index
+5. Save `vector_store/index.faiss` and `vector_store/confluence_chunking_report.json`
 
-**Note:** This process may take several minutes depending on the size of your Confluence instance.
+### Index GitHub READMEs
 
-## Running the Chatbot
+```bash
+python setup_github_index.py
+```
 
-Once the index is created, start the Streamlit app:
+Or specify repositories explicitly:
+
+```bash
+python setup_github_index.py --repos org/repo1 org/repo2
+```
+
+This will:
+1. Fetch the README from each repository (one chunk per README)
+2. Generate embeddings and build a separate FAISS index
+3. Save `vector_store/github_index.faiss` and `vector_store/github_chunking_report.json`
+
+> Both indexing runs must complete before starting the app.
+
+## Running the App
 
 ```bash
 streamlit run app.py
 ```
 
-The chatbot will open in your default browser at `http://localhost:8501`
+Opens at `http://localhost:8501`
 
-## Usage
+## How It Works
 
-1. **Ask Questions**: Type your question in the text input field
-2. **View Responses**: The AI will provide answers based on your Confluence documentation
-3. **Check Sources**: See which Confluence pages were used to generate the answer
-4. **Find Related Repos**: GitHub repository links mentioned in the documentation will be displayed
-5. **Clear History**: Use the sidebar button to start a new conversation
+### Query Flow
+
+1. User submits a query via the chat interface
+2. **Supervisor agent** sends the query to GPT-4o for intent classification
+3. GPT-4o returns a JSON payload identifying the required data sources (e.g., `{"targets": ["confluence"]}`)
+4. Only the selected agents are invoked
+5. Each selected agent calls its tool, which searches the relevant FAISS index or database
+6. Results from all invoked agents are merged
+7. If no agent returns a useful answer, the Confluence agent is called as a fallback
+8. Final response with source links is displayed in the chat
+
+### Semantic Chunking
+
+- Confluence documents are split using `SemanticChunker` (percentile threshold 85)
+- If `langchain_experimental` is unavailable, `RecursiveCharacterTextSplitter` is used (size 1200, overlap 150)
+- GitHub READMEs are stored as single chunks (`force_single_chunk=True`)
+- Each chunk stores metadata: `doc_id`, `title`, `space`, `space_key`, `type`, `url`, `chunk_index`
+- A JSON chunking report is saved after every indexing run
+
+### Database Agent
+
+- Converts natural language to SQL `SELECT` queries
+- Currently uses a local SQLite in-memory database seeded with demo retail data:
+  - `stores_operations` — 50 rows of daily store operation records
+  - `retail_inventory_management` — 50 rows of product inventory records
+- To connect to Azure SQL instead, configure `AZURE_SQL_SERVER`, `AZURE_SQL_DATABASE`, `AZURE_SQL_USERNAME`, and `AZURE_SQL_PASSWORD` in `.env` and update `database_search.py`
 
 ## Project Structure
 
 ```
-AIGuru/
-├── app.py                  # Main Streamlit application
-├── config.py              # Configuration management
-├── confluence_fetcher.py  # Confluence API integration
-├── vector_store.py        # FAISS vector store implementation
-├── setup_index.py         # Index creation script
-├── requirements.txt       # Python dependencies
-├── .env.example          # Environment variables template
-├── .gitignore            # Git ignore file
-└── README.md             # This file
+MyGuru.AI-main/
+├── app.py                      # Streamlit UI and app initialization
+├── agents.py                   # Confluence, GitHub, Database, and Supervisor agents
+├── agent_tools.py              # LangChain tool wrappers for each agent
+├── config.py                   # Environment variable configuration
+├── confluence_fetcher.py       # Confluence API integration
+├── github_search.py            # GitHub API integration and document builder
+├── vector_store.py             # FAISS vector store (index, save, load, search)
+├── semantic_chunking.py        # SemanticChunkingService with fallback splitter
+├── database_search.py          # SQLite / Azure SQL database searcher
+├── sqlite_seed_data.py         # In-memory SQLite seed data (demo tables)
+├── setup_index.py              # Confluence indexing script
+├── setup_github_index.py       # GitHub indexing script
+├── requirements.txt            # Python dependencies
+├── .env                        # Environment variables (not committed)
+├── vector_store/
+│   ├── index.faiss             # Confluence FAISS index
+│   ├── metadata.pkl            # Confluence documents + chunk report
+│   ├── github_index.faiss      # GitHub FAISS index
+│   ├── github_metadata.pkl     # GitHub documents + chunk report
+│   ├── confluence_chunking_report.json
+│   └── github_chunking_report.json
+└── README.md
 ```
-
-## How It Works
-
-1. **Data Fetching**: `confluence_fetcher.py` connects to Confluence and retrieves all pages and PDFs
-2. **Text Processing**: Content is split into chunks for better semantic search
-3. **Embeddings**: Azure OpenAI creates vector embeddings for each chunk
-4. **Indexing**: FAISS stores the vectors for fast similarity search
-5. **Query Processing**: User queries are embedded and matched against the index
-6. **Response Generation**: GPT-4o generates answers using the most relevant chunks as context
 
 ## Troubleshooting
 
-**Import errors**: Make sure all dependencies are installed:
+**Import errors**
 ```bash
 pip install -r requirements.txt
 ```
 
-**Index not found**: Run the setup script:
+**Confluence index not found**
 ```bash
 python setup_index.py
 ```
 
-**Confluence connection issues**: 
-- Verify your credentials in `.env`
-- Ensure your API token is valid
-- Check your Confluence URL format
-
-**Azure OpenAI errors**:
-- Verify your API key and endpoint
-- Ensure your deployments are named correctly
-- Check you have sufficient quota
-
-## Updating the Index
-
-To refresh your index with new Confluence content:
-
+**GitHub index not found**
 ```bash
-python setup_index.py
+python setup_github_index.py
 ```
 
-This will fetch the latest documents and rebuild the index.
+**Confluence connection issues**
+- Verify `CONFLUENCE_URL`, `CONFLUENCE_USERNAME`, and `CONFLUENCE_API_TOKEN` in `.env`
+- Ensure the API token is still valid
 
-## Performance Tips
+**Azure OpenAI errors**
+- Verify `AZURE_OPENAI_API_KEY` and `AZURE_OPENAI_ENDPOINT`
+- Confirm deployment names match `AZURE_OPENAI_CHAT_DEPLOYMENT` and `AZURE_OPENAI_EMBEDDING_DEPLOYMENT`
+- Check that you have sufficient quota for GPT-4o and text-embedding-3-small
 
-- The initial indexing can take time for large Confluence instances
-- Adjust chunk sizes in `vector_store.py` if needed
-- Increase `k` parameter in search for more context (but slower responses)
-- Use FAISS GPU version for faster search on large datasets
+**GitHub token errors**
+- Ensure `GITHUB_TOKEN` has `repo` and `read:org` scopes
+- For private repositories, confirm the token has access
+
+## Updating Indexes
+
+To re-index after new content is added:
+
+```bash
+python setup_index.py          # Rebuild Confluence index
+python setup_github_index.py   # Rebuild GitHub index
+```
 
 ## Contributing
 
-Feel free to submit issues or pull requests to improve the chatbot!
+Feel free to submit issues or pull requests to improve the assistant.
 
 ## License
 
 MIT License
+
